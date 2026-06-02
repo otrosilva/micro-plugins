@@ -1,0 +1,13 @@
+{
+    "Name": "csvmd",
+    "Description": "Convierte selección CSV a tabla Markdown",
+    "Tags": ["csv", "markdown", "table"],
+    "Versions": [
+        {
+            "Version": "1.0.0",
+            "Require": {
+                "micro": ">=2.0.0"
+            }
+        }
+    ]
+}

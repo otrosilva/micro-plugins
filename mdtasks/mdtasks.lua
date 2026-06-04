@@ -1,7 +1,7 @@
 VERSION = "1.0.0"
 -- bindings.json
 -- {
---     "F11": "lua:mdtasks.ToggleTasks"
+--     "Alt-L": "lua:mdtasks.ToggleTasks"
 -- }
 local micro  = import("micro")
 local config = import("micro/config")

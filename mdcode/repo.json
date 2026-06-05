@@ -5,7 +5,7 @@
     "Tags": ["markdown", "code", "block", "obsidian"],
     "Versions": [
         {
-            "Version": "1.1.0",
+            "Version": "1.2.0",
             "Require": {
                 "micro": ">=2.0.0"
             }

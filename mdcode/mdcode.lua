@@ -1,7 +1,8 @@
 -- mdcode: encierra/desencierra líneas seleccionadas en bloque de código Markdown
+-- Expande la selección a líneas completas automáticamente
 -- Primera pulsación:  añade ```code arriba y ``` abajo, mantiene selección
 -- Segunda pulsación:  detecta el bloque y lo elimina, mantiene selección
--- Versión: 1.1.0
+-- Versión: 1.2.0
 
 local micro  = import("micro")
 local config = import("micro/config")
@@ -24,22 +25,33 @@ local function getSelectionLocs()
     return buffer.Loc(a.X, a.Y), buffer.Loc(b.X, b.Y)
 end
 
--- Restaura la selección entre dos líneas completas (de col 0 a fin de línea)
-local function restoreSelection(cursor, buf, startY, endY)
-    local startLoc = buffer.Loc(0, startY)
-    local endLoc   = buffer.Loc(#buf:Line(endY), endY)
+-- Expande los Locs a líneas completas:
+-- a.X = 0, b = fin de su línea (si b.X==0 y b.Y>a.Y, retrocede una línea)
+local function expandToFullLines(a, b, buf)
+    local firstY = a.Y
+    local lastY  = b.Y
+    if b.X == 0 and b.Y > a.Y then
+        lastY = b.Y - 1
+    end
+    local startLoc = buffer.Loc(0, firstY)
+    local endLoc   = buffer.Loc(#buf:Line(lastY), lastY)
+    return startLoc, endLoc, firstY, lastY
+end
+
+-- Restaura la selección cubriendo líneas completas firstY..lastY
+local function restoreSelection(cursor, buf, firstY, lastY)
+    local startLoc = buffer.Loc(0, firstY)
+    local endLoc   = buffer.Loc(#buf:Line(lastY), lastY)
     cursor:SetSelectionStart(startLoc)
     cursor:SetSelectionEnd(endLoc)
     cursor.Loc.X = endLoc.X
     cursor.Loc.Y = endLoc.Y
 end
 
--- Detecta si la línea es apertura de bloque (```algo o ``` sola)
 local function isOpenFence(line)
     return line:match("^```") ~= nil
 end
 
--- Detecta si la línea es cierre de bloque (``` exacto, sin nada más)
 local function isCloseFence(line)
     return line:match("^```%s*$") ~= nil
 end
@@ -57,59 +69,45 @@ function mdcodeCmd(bp)
 
     local buf = micro.CurPane().Buf
 
-    -- Ajustar lastY igual que antes
-    local lastY = b.Y
-    if b.X == 0 and b.Y > a.Y then
-        lastY = b.Y - 1
-    end
+    -- Expandir siempre a líneas completas
+    local fullA, fullB, firstY, lastY = expandToFullLines(a, b, buf)
 
-    -- ¿La línea justo antes es apertura y la de después es cierre?
-    local prevY = a.Y - 1
+    -- ¿Hay cercas justo alrededor de las líneas completas?
+    local prevY = firstY - 1
     local nextY = lastY + 1
     local hasFences = false
     if prevY >= 0 and nextY <= buf:LinesNum() - 1 then
-        local prevLine = buf:Line(prevY)
-        local nextLine = buf:Line(nextY)
-        if isOpenFence(prevLine) and isCloseFence(nextLine) then
+        if isOpenFence(buf:Line(prevY)) and isCloseFence(buf:Line(nextY)) then
             hasFences = true
         end
     end
 
     if hasFences then
-        -- QUITAR el bloque: eliminar línea de cierre primero (índice mayor),
-        -- luego la de apertura (para no desplazar índices)
-        local closeStart = buffer.Loc(0, nextY)
-        local closeEnd   = buffer.Loc(#buf:Line(nextY), nextY)
-        -- Borrar línea de cierre: desde el \n al final de la línea anterior
-        -- hasta el final de la línea de cierre
+        -- QUITAR cercas: primero la de cierre (índice mayor), luego la de apertura
         local closeFrom = buffer.Loc(#buf:Line(nextY - 1), nextY - 1)
         local closeTo   = buffer.Loc(#buf:Line(nextY), nextY)
         buf.EventHandler:Remove(closeFrom, closeTo)
 
-        -- Ahora borrar línea de apertura (prevY sigue igual, nextY ya no existe)
         local openFrom = buffer.Loc(0, prevY)
-        local openTo   = buffer.Loc(#buf:Line(prevY) + 1, prevY)  -- +1 captura el \n
-        -- Remove desde inicio de prevY hasta inicio de a.Y (que ahora es prevY+1)
-        local openStart2 = buffer.Loc(0, prevY)
-        local openEnd2   = buffer.Loc(0, prevY + 1)
-        buf.EventHandler:Remove(openStart2, openEnd2)
+        local openTo   = buffer.Loc(0, prevY + 1)
+        buf.EventHandler:Remove(openFrom, openTo)
 
-        -- Las líneas del contenido ahora empiezan en prevY
-        restoreSelection(cursor, buf, prevY, prevY + (lastY - a.Y))
+        -- El contenido quedó en prevY .. prevY+(lastY-firstY)
+        restoreSelection(cursor, buf, prevY, prevY + (lastY - firstY))
         micro.InfoBar():Message("mdcode -> bloque eliminado")
     else
-        -- AÑADIR el bloque
+        -- AÑADIR cercas
 
-        -- Insertar ``` al final de la última línea (cierre)
+        -- Cierre al final de lastY
         local closeLoc = buffer.Loc(#buf:Line(lastY), lastY)
         buf.EventHandler:Insert(closeLoc, "\n```")
 
-        -- Insertar ```code al inicio de la primera línea (apertura)
-        local openLoc = buffer.Loc(0, a.Y)
+        -- Apertura al inicio de firstY
+        local openLoc = buffer.Loc(0, firstY)
         buf.EventHandler:Insert(openLoc, "```code\n")
 
-        -- El contenido ahora está en a.Y+1 .. lastY+1
-        restoreSelection(cursor, buf, a.Y + 1, lastY + 1)
+        -- El contenido quedó en firstY+1 .. lastY+1
+        restoreSelection(cursor, buf, firstY + 1, lastY + 1)
         micro.InfoBar():Message("mdcode -> bloque insertado")
     end
 end

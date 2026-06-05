@@ -1,0 +1,14 @@
+[{
+    "Name": "mdformat",
+    "Description": "Cicla el formato Markdown: sin formato → negrita → itálica → tachado → sin formato",
+    "Website": "",
+    "Tags": ["markdown", "format", "bold", "italic", "strikethrough"],
+    "Versions": [
+        {
+            "Version": "1.1.0",
+            "Require": {
+                "micro": ">=2.0.0"
+            }
+        }
+    ]
+}]

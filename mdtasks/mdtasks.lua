@@ -1,7 +1,7 @@
 VERSION = "1.0.0"
--- bindings.json
+-- Keybinding recomendada (agregar a ~/.config/micro/bindings.json):
 -- {
---     "Alt-L": "lua:mdtasks.ToggleTasks"
+--     "F11": "lua:mdtasks.ToggleTasks"
 -- }
 local micro  = import("micro")
 local config = import("micro/config")
@@ -9,12 +9,14 @@ local buffer = import("micro/buffer")
 
 local function processLine(text)
     local indent, body
-    -- Estado 1: "- [ ] texto" → "- [x] texto"
+
+    -- Estado 3: "- [ ] texto" → "- [x] texto"
     indent, body = text:match("^(%s*)%- %[%s%] (.*)$")
     if indent then
         return indent .. "- [x] " .. body
     end
-    -- Estado 2: "- [x] texto" o "- [X] texto" → texto plano
+
+    -- Estado 4: "- [x] texto" o "- [X] texto" → texto plano
     indent, body = text:match("^(%s*)%- %[x%] (.*)$")
     if indent then
         return indent .. body
@@ -23,13 +25,21 @@ local function processLine(text)
     if indent then
         return indent .. body
     end
+
+    -- Estado 2: "- texto" (viñeta simple) → "- [ ] texto"
+    indent, body = text:match("^(%s*)%- (.*)$")
+    if indent then
+        return indent .. "- [ ] " .. body
+    end
+
     -- Línea vacía → sin cambios
     if text:match("^%s*$") then
         return text
     end
-    -- Estado 3: texto plano → "- [ ] texto"
+
+    -- Estado 1: texto plano → "- texto"
     indent, body = text:match("^(%s*)(.*)$")
-    return indent .. "- [ ] " .. body
+    return indent .. "- " .. body
 end
 
 function ToggleTasks(bp)
@@ -44,7 +54,6 @@ function ToggleTasks(bp)
     if hasSelection then
         local a = sel[1]
         local b = sel[2]
-        -- Si la selección termina al inicio de una línea, excluirla
         if b.X == 0 and b.Y > a.Y then
             b = buffer.Loc(b.X, b.Y - 1)
         end

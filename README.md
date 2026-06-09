@@ -9,3 +9,4 @@
 - mdcsv    - convierte tabla markdown a csv.
 - mdformat - pasa de normal -> negrita -> itálica -> tachado -> resaltado.
 - mdcode   - encierra en bloque de código las líneas seleccionadas.
+- barra    - una barra en las tareas con subtareas.

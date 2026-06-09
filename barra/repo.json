@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "barra",
+    "Description": "Genera barras de progreso en tareas con subtareas Markdown. F10 procesa la selección, F9 procesa todo el archivo.",
+    "Tags": ["markdown", "tasks", "todo", "progress"],
+    "Versions": [
+      {
+        "Version": "1.0.0",
+        "Url": "https://github.com/tu-usuario/micro-barra/archive/refs/tags/v1.0.0.zip",
+        "Require": {
+          "micro": ">=2.0.0"
+        }
+      }
+    ]
+  }
+]

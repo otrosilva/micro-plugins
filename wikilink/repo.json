@@ -1,0 +1,14 @@
+[{
+    "Name": "wikilink",
+    "Description": "Autcompleta enlaces tipo wiki",
+    "Website": "",
+    "Tags": ["markdown", "wiki", "obsidian"],
+    "Versions": [
+        {
+            "Version": "1.3.0",
+            "Require": {
+                "micro": ">=2.0.0"
+            }
+        }
+    ]
+}]

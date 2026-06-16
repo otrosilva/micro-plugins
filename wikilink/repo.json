@@ -1,11 +1,11 @@
 [{
     "Name": "wikilink",
-    "Description": "Autcompleta enlaces tipo wiki",
+    "Description": "Autcompleta enlaces tipo wiki y abre archivos enlazados",
     "Website": "",
     "Tags": ["markdown", "wiki", "obsidian"],
     "Versions": [
         {
-            "Version": "1.5.0",
+            "Version": "1.6.0",
             "Require": {
                 "micro": ">=2.0.0"
             }

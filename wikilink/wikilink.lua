@@ -1,6 +1,15 @@
 -- wikilink.lua
 -- Cicla candidatos [[wiki]] con selección persistente.
--- Si no hay selección pero el cursor está dentro de [[...]], lo selecciona primero.
+--
+-- Comandos:
+--   :wikilink      → cicla archivos .md que coincidan con el texto en [[...]]
+--   :wikilinkopen  → abre el archivo referenciado en [[...]] en nueva pestaña
+--                    (lo crea si no existe)
+--
+--   {
+--       "Alt-w": "lua:wikilink.WikilinkCycle",
+--       "Alt-e": "lua:wikilink.WikilinkOpen"
+--   }
 
 local micro  = import("micro")
 local config = import("micro/config")
@@ -69,8 +78,7 @@ local function build_candidates(dir, query)
 end
 
 -- =========================
--- AUTO-SELECT [[...]] bajo el cursor
--- Devuelve (sx, sy, ex, ey) de todo el [[...]], o nil si no hay ninguno.
+-- FIND [[...]] UNDER CURSOR
 -- =========================
 
 local function find_wikilink_at_cursor(bp)
@@ -79,15 +87,12 @@ local function find_wikilink_at_cursor(bp)
     local cy   = c.Loc.Y
     local line = bp.Buf:Line(cy)
 
-    -- Busca todos los [[...]] en la línea y comprueba si el cursor cae dentro
     local search_from = 1
     while true do
         local s, e = line:find("%[%[.-%]%]", search_from)
         if not s then break end
-        -- s-1 y e son índices Lua (1-based); cx es 0-based
-        -- el cursor está "dentro" si cx >= s-1 y cx <= e
         if cx >= (s - 1) and cx <= e then
-            return s - 1, cy, e, cy   -- 0-based para micro
+            return s - 1, cy, e, cy
         end
         search_from = e + 1
     end
@@ -162,14 +167,32 @@ local function replace_and_reselect(bp, sx, sy, ex, ey, value)
 end
 
 -- =========================
--- COMMAND
+-- RESOLVE LINK → PATH ABSOLUTO
+-- Añade .md si no tiene extensión, resuelve relativo al vault dir.
+-- =========================
+
+local function resolve_path(bp, link)
+    local dir  = get_dir(bp)
+    -- Si el link no tiene extensión, asume .md
+    local path = link
+    if not path:match("%.[^/]+$") then
+        path = path .. ".md"
+    end
+    -- Si no es absoluto, lo hace relativo al vault dir
+    if path:sub(1, 1) ~= "/" then
+        path = dir .. "/" .. path
+    end
+    return path
+end
+
+-- =========================
+-- COMMAND: WikilinkCycle (Alt-W)
 -- =========================
 
 function WikilinkCycle(bp)
 
     local sel, sx, sy, ex, ey = get_selection(bp)
 
-    -- Sin selección: intenta seleccionar el [[...]] bajo el cursor
     if not sel then
         local fsx, fsy, fex, fey = find_wikilink_at_cursor(bp)
         if fsx == nil then
@@ -177,12 +200,10 @@ function WikilinkCycle(bp)
             return
         end
         sx, sy, ex, ey = fsx, fsy, fex, fey
-        -- Construye la selección visualmente para que el usuario la vea
         local c = bp.Cursor
         c.CurSelection[1] = buffer.Loc(sx, sy)
         c.CurSelection[2] = buffer.Loc(ex, ey)
         c.Loc = buffer.Loc(ex, ey)
-        -- Lee el texto ahora que tenemos las coordenadas
         local line = bp.Buf:Line(sy)
         sel = line:sub(sx + 1, ex)
     end
@@ -215,11 +236,60 @@ function WikilinkCycle(bp)
 end
 
 -- =========================
+-- COMMAND: WikilinkOpen (Alt-E)
+-- Abre en nueva pestaña el archivo referenciado por [[...]] bajo cursor
+-- o selección. Lo crea si no existe.
+-- =========================
+
+function WikilinkOpen(bp)
+
+    -- Obtiene el texto del enlace: primero selección, luego bajo cursor
+    local sel, _, _, _, _ = get_selection(bp)
+
+    if not sel then
+        local fsx, fsy, fex, fey = find_wikilink_at_cursor(bp)
+        if fsx == nil then
+            micro.InfoBar():Message("wikilink: cursor no está dentro de [[...]]")
+            return
+        end
+        local line = bp.Buf:Line(fsy)
+        sel = line:sub(fsx + 1, fex)
+    end
+
+    local inner = extract_inner(sel)
+
+    if inner == "" then
+        micro.InfoBar():Message("wikilink: el enlace está vacío")
+        return
+    end
+
+    local full_path = resolve_path(bp, inner)
+
+    -- Crea el archivo si no existe (touch equivalente)
+    local f = io.open(full_path, "r")
+    if f then
+        f:close()
+    else
+        local nf = io.open(full_path, "w")
+        if nf then
+            nf:close()
+        else
+            micro.InfoBar():Message("wikilink: no se pudo crear " .. full_path)
+            return
+        end
+    end
+
+    -- Abre en nueva pestaña usando el comando interno :tab
+    bp:NewTabCmd({full_path})
+
+    micro.InfoBar():Message("wikilink: abierto → " .. full_path)
+end
+
+-- =========================
 -- INIT
 -- =========================
 
 function init()
     config.MakeCommand("wikilink", WikilinkCycle, config.NoComplete)
-    -- ~/.config/micro/bindings.json:
-    -- "Alt-w": "lua:wikilink.WikilinkCycle"
+    config.MakeCommand("wikilinkopen", WikilinkOpen, config.NoComplete)
 end

@@ -6,6 +6,7 @@
 --   :wikilinkopen  → abre el archivo referenciado en [[...]] en nueva pestaña
 --                    (lo crea si no existe)
 --
+-- Bindear en ~/.config/micro/bindings.json:
 --   {
 --       "Alt-w": "lua:wikilink.WikilinkCycle",
 --       "Alt-e": "lua:wikilink.WikilinkOpen"
@@ -216,6 +217,17 @@ function WikilinkCycle(bp)
         local dir          = get_dir(bp)
         state.vault_dir    = dir
         state.candidates   = build_candidates(dir, inner)
+        -- Si el enlace está vacío [[]], inserta la fecha de hoy como primera opción
+        if inner == "" then
+            local f = io.popen("date +%Y-%m-%d 2>/dev/null")
+            if f then
+                local today = f:read("*l")
+                f:close()
+                if today and today ~= "" then
+                    table.insert(state.candidates, 1, today)
+                end
+            end
+        end
     end
 
     if #state.candidates == 0 then

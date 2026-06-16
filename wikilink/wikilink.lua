@@ -1,57 +1,97 @@
--- wikilink.lua (modo selección + rotación + anchor query fijo)
+-- wikilink.lua
+-- Cicla candidatos [[wiki]] con selección persistente.
+-- Si no hay selección pero el cursor está dentro de [[...]], lo selecciona primero.
 
 local micro  = import("micro")
 local config = import("micro/config")
 local buffer = import("micro/buffer")
 
--- =========================
--- STATE GLOBAL
--- =========================
-
 local state = {
-    candidates = {},
-    index = 0,
-    last_dir = ".",
+    candidates   = {},
+    index        = 0,
     anchor_query = nil,
-    anchor_range = nil,
+    vault_dir    = nil,
 }
 
 -- =========================
--- FILE CACHE
+-- VAULT DIR
 -- =========================
 
-local function trim_md(path)
-    return path:gsub("%.md$", "")
+local function get_dir(bp)
+    local path = bp.Buf.Path
+    if path and path ~= "" then
+        local dir = path:match("^(.*)/[^/]*$")
+        if dir and dir ~= "" then return dir end
+    end
+    local f = io.popen("pwd 2>/dev/null")
+    if f then
+        local d = f:read("*l")
+        f:close()
+        if d and d ~= "" then return d end
+    end
+    return "."
+end
+
+-- =========================
+-- FILE SEARCH
+-- =========================
+
+local function trim_md(s)
+    return s:gsub("%.md$", "")
 end
 
 local function build_candidates(dir, query)
     local results = {}
-
-    local cmd = 'find "' .. dir .. '" -type f -name "*.md" -not -path "*/.*" 2>/dev/null'
+    local cmd = string.format(
+        'find %q -type f -name "*.md" -not -path "*/.*" 2>/dev/null | sort',
+        dir
+    )
     local p = io.popen(cmd)
     if not p then return results end
 
-    local q = query:lower()
+    local q      = query:lower()
+    local prefix = dir:gsub("/$", "") .. "/"
 
     for line in p:lines() do
-        if line and line ~= "" then
+        if line ~= "" then
             local rel = line
-
-            if rel:sub(1, #dir) == dir then
-                rel = rel:sub(#dir + 2)
+            if rel:sub(1, #prefix) == prefix then
+                rel = rel:sub(#prefix + 1)
             end
-
             rel = trim_md(rel)
-
-            if q == "" or rel:lower():sub(1, #q) == q then
+            if q == "" or rel:lower():find(q, 1, true) then
                 table.insert(results, rel)
             end
         end
     end
-
     p:close()
-    table.sort(results)
     return results
+end
+
+-- =========================
+-- AUTO-SELECT [[...]] bajo el cursor
+-- Devuelve (sx, sy, ex, ey) de todo el [[...]], o nil si no hay ninguno.
+-- =========================
+
+local function find_wikilink_at_cursor(bp)
+    local c    = bp.Cursor
+    local cx   = c.Loc.X
+    local cy   = c.Loc.Y
+    local line = bp.Buf:Line(cy)
+
+    -- Busca todos los [[...]] en la línea y comprueba si el cursor cae dentro
+    local search_from = 1
+    while true do
+        local s, e = line:find("%[%[.-%]%]", search_from)
+        if not s then break end
+        -- s-1 y e son índices Lua (1-based); cx es 0-based
+        -- el cursor está "dentro" si cx >= s-1 y cx <= e
+        if cx >= (s - 1) and cx <= e then
+            return s - 1, cy, e, cy   -- 0-based para micro
+        end
+        search_from = e + 1
+    end
+    return nil
 end
 
 -- =========================
@@ -59,34 +99,42 @@ end
 -- =========================
 
 local function get_selection(bp)
-    local c = bp.Cursor
+    local c   = bp.Cursor
     local sel = c.CurSelection
+    local a, b = sel[1], sel[2]
 
-    local a = sel[1]
-    local b = sel[2]
+    local ax, ay = a.X, a.Y
+    local bx, by = b.X, b.Y
 
-    if a.X == b.X and a.Y == b.Y then
-        return nil, nil, nil
+    if ax == bx and ay == by then
+        return nil, nil, nil, nil, nil
     end
 
-    local buf = bp.Buf
+    local sx, sy, ex, ey
+    if ay < by or (ay == by and ax <= bx) then
+        sx, sy, ex, ey = ax, ay, bx, by
+    else
+        sx, sy, ex, ey = bx, by, ax, ay
+    end
 
-    local first = math.min(a.Y, b.Y)
-    local last  = math.max(a.Y, b.Y)
-
+    local buf   = bp.Buf
     local lines = {}
-    for y = first, last do
-        table.insert(lines, buf:Line(y))
+    for y = sy, ey do
+        local l = buf:Line(y)
+        if y == sy and y == ey then
+            l = l:sub(sx + 1, ex)
+        elseif y == sy then
+            l = l:sub(sx + 1)
+        elseif y == ey then
+            l = l:sub(1, ex)
+        end
+        table.insert(lines, l)
     end
 
-    return table.concat(lines, "\n"), first, last
+    return table.concat(lines, "\n"), sx, sy, ex, ey
 end
 
--- =========================
--- CLEAN QUERY
--- =========================
-
-local function extract_query(text)
+local function extract_inner(text)
     text = text:gsub("^%[%[", "")
     text = text:gsub("%]%]$", "")
     text = text:gsub("^%s+", "")
@@ -94,90 +142,75 @@ local function extract_query(text)
     return text
 end
 
--- =========================
--- REPLACE
--- =========================
-
-local function select_wikilink(bp, line)
-    local text = bp.Buf:Line(line)
-
-    local s, e = text:find("%[%[[^%]]*%]%]")
-
-    if not s or not e then
-        return
+local function is_expanded_candidate(text)
+    for _, c in ipairs(state.candidates) do
+        if c == text then return true end
     end
-
-    local start = buffer.Loc(s - 1, line)
-    local fin   = buffer.Loc(e, line)
-
-    bp.Cursor.CurSelection = {start, fin}
-    bp.Cursor.Loc = fin
-end
-
-local function replace_selection(bp, first, last, value)
-    local buf = bp.Buf
-
-    local start = buffer.Loc(0, first)
-    local endl  = buffer.Loc(#buf:Line(last), last)
-
-    buf:Replace(start, endl, value)
-
-    select_wikilink(bp, first)
+    return false
 end
 
 -- =========================
--- MAIN
+-- REPLACE + RESELECT
+-- =========================
+
+local function replace_and_reselect(bp, sx, sy, ex, ey, value)
+    local c = bp.Cursor
+    bp.Buf:Replace(buffer.Loc(sx, sy), buffer.Loc(ex, ey), value)
+    c.CurSelection[1] = buffer.Loc(sx, sy)
+    c.CurSelection[2] = buffer.Loc(sx + #value, sy)
+    c.Loc = buffer.Loc(sx + #value, sy)
+end
+
+-- =========================
+-- COMMAND
 -- =========================
 
 function WikilinkCycle(bp)
 
-    local dir = "."
-    local sel, first, last = get_selection(bp)
+    local sel, sx, sy, ex, ey = get_selection(bp)
 
+    -- Sin selección: intenta seleccionar el [[...]] bajo el cursor
     if not sel then
-        micro.InfoBar():Message("Selecciona [[texto]] primero")
-        return
+        local fsx, fsy, fex, fey = find_wikilink_at_cursor(bp)
+        if fsx == nil then
+            micro.InfoBar():Message("wikilink: cursor no está dentro de [[...]]")
+            return
+        end
+        sx, sy, ex, ey = fsx, fsy, fex, fey
+        -- Construye la selección visualmente para que el usuario la vea
+        local c = bp.Cursor
+        c.CurSelection[1] = buffer.Loc(sx, sy)
+        c.CurSelection[2] = buffer.Loc(ex, ey)
+        c.Loc = buffer.Loc(ex, ey)
+        -- Lee el texto ahora que tenemos las coordenadas
+        local line = bp.Buf:Line(sy)
+        sel = line:sub(sx + 1, ex)
     end
 
-    local query = extract_query(sel)
+    local inner = extract_inner(sel)
 
-    local range_key = first .. ":" .. last
-
-    if state.anchor_query == nil or state.anchor_range ~= range_key then
-        state.anchor_query = query
-        state.anchor_range = range_key
-
-        state.candidates = {}
-        state.index = 0
-    end
-
-    local active_query = state.anchor_query
-
-    -- rebuild candidates si necesario
-    if state.last_dir ~= dir or #state.candidates == 0 then
-        state.candidates = build_candidates(dir, active_query)
-        state.index = 0
-        state.last_dir = dir
+    if not is_expanded_candidate(inner) then
+        state.anchor_query = inner
+        state.index        = 0
+        local dir          = get_dir(bp)
+        state.vault_dir    = dir
+        state.candidates   = build_candidates(dir, inner)
     end
 
     if #state.candidates == 0 then
-        micro.InfoBar():Message("Sin coincidencias: " .. active_query)
+        micro.InfoBar():Message('wikilink: sin coincidencias para "' .. state.anchor_query .. '"')
         return
     end
 
-    -- cycle
-    state.index = state.index + 1
-    if state.index > #state.candidates then
-        state.index = 1
-    end
+    state.index = (state.index % #state.candidates) + 1
 
-    local replacement = "[[" .. state.candidates[state.index] .. "]]"
+    local candidate   = state.candidates[state.index]
+    local replacement = "[[" .. candidate .. "]]"
 
-    replace_selection(bp, first, last, replacement)
+    replace_and_reselect(bp, sx, sy, ex, ey, replacement)
 
     micro.InfoBar():Message(
-        "Wiki → " .. state.index .. "/" .. #state.candidates ..
-        " : " .. state.candidates[state.index]
+        string.format("wikilink [%d/%d]: %s", state.index, #state.candidates, candidate)
     )
 end
 
@@ -187,4 +220,6 @@ end
 
 function init()
     config.MakeCommand("wikilink", WikilinkCycle, config.NoComplete)
+    -- ~/.config/micro/bindings.json:
+    -- "Alt-w": "lua:wikilink.WikilinkCycle"
 end

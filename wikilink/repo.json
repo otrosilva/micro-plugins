@@ -5,7 +5,7 @@
     "Tags": ["markdown", "wiki", "obsidian"],
     "Versions": [
         {
-            "Version": "1.6.1",
+            "Version": "1.8.0",
             "Require": {
                 "micro": ">=2.0.0"
             }

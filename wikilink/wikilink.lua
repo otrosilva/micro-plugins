@@ -16,12 +16,57 @@ local micro  = import("micro")
 local config = import("micro/config")
 local buffer = import("micro/buffer")
 
+-- =========================
+-- CONFIGURACIÓN
+-- =========================
+
+-- Primera opción al ciclar [[]] vacío.
+-- Puede ser una fecha con formato strftime, una cadena fija, o nil para desactivar.
+-- Ejemplos:
+--   "%Y-%m-%d"        → 2025-06-16  (fecha de hoy, estilo Obsidian daily note)
+--   "%d-%m-%Y"        → 16-06-2025
+--   "%Y/%m/%d"        → 2025/06/16  (crea subcarpetas por año/mes)
+--   "Inbox"           → siempre sugiere el archivo Inbox
+--   nil               → sin sugerencia especial, cicla todos los archivos
+local EMPTY_LINK_DEFAULT = "%Y-%m-%d"
+
+-- =========================
+-- STATE
+-- =========================
+
 local state = {
     candidates   = {},
     index        = 0,
     anchor_query = nil,
     vault_dir    = nil,
 }
+
+-- =========================
+-- UTF-8: bytes → runas
+-- Micro usa X en runas (caracteres Unicode), Lua trabaja en bytes.
+-- Necesitamos convertir los índices de find() antes de pasarlos a buffer.Loc().
+-- =========================
+
+-- Cuenta runas en un string de bytes hasta el byte offset dado (0-based).
+local function bytes_to_runes(s, byte_offset)
+    local runes = 0
+    local i = 1
+    if byte_offset > #s then byte_offset = #s end
+    while i <= byte_offset do
+        local b = s:byte(i)
+        if b < 0x80 then
+            i = i + 1
+        elseif b < 0xE0 then
+            i = i + 2
+        elseif b < 0xF0 then
+            i = i + 3
+        else
+            i = i + 4
+        end
+        runes = runes + 1
+    end
+    return runes
+end
 
 -- =========================
 -- VAULT DIR
@@ -80,20 +125,26 @@ end
 
 -- =========================
 -- FIND [[...]] UNDER CURSOR
+-- Devuelve coordenadas en RUNAS (para buffer.Loc), no en bytes.
 -- =========================
 
 local function find_wikilink_at_cursor(bp)
     local c    = bp.Cursor
-    local cx   = c.Loc.X
+    local cx   = c.Loc.X   -- runas (micro)
     local cy   = c.Loc.Y
-    local line = bp.Buf:Line(cy)
+    local line = bp.Buf:Line(cy)  -- bytes UTF-8
 
     local search_from = 1
     while true do
         local s, e = line:find("%[%[.-%]%]", search_from)
         if not s then break end
-        if cx >= (s - 1) and cx <= e then
-            return s - 1, cy, e, cy
+
+        -- Convierte índices de bytes a runas para comparar con cx
+        local s_rune = bytes_to_runes(line, s - 1)  -- 0-based rune del primer [
+        local e_rune = bytes_to_runes(line, e + 1)  -- 0-based rune después del último ]
+
+        if cx >= s_rune and cx <= e_rune then
+            return s_rune, cy, e_rune, cy
         end
         search_from = e + 1
     end
@@ -102,6 +153,7 @@ end
 
 -- =========================
 -- SELECTION
+-- Lee coordenadas en runas desde CurSelection (micro ya las guarda en runas).
 -- =========================
 
 local function get_selection(bp)
@@ -123,26 +175,36 @@ local function get_selection(bp)
         sx, sy, ex, ey = bx, by, ax, ay
     end
 
-    local buf   = bp.Buf
-    local lines = {}
-    for y = sy, ey do
-        local l = buf:Line(y)
-        if y == sy and y == ey then
-            l = l:sub(sx + 1, ex)
-        elseif y == sy then
-            l = l:sub(sx + 1)
-        elseif y == ey then
-            l = l:sub(1, ex)
+    -- Para leer el texto usamos LineBytes y extraemos por runas
+    local line = bp.Buf:Line(sy)
+
+    -- Convierte runa offset a byte offset para sub()
+    local function rune_to_byte(s, rune_count)
+        local i = 1
+        local r = 0
+        while r < rune_count and i <= #s do
+            local b = s:byte(i)
+            if b < 0x80 then i = i + 1
+            elseif b < 0xE0 then i = i + 2
+            elseif b < 0xF0 then i = i + 3
+            else i = i + 4 end
+            r = r + 1
         end
-        table.insert(lines, l)
+        return i - 1  -- byte offset 0-based del último byte leído
     end
 
-    return table.concat(lines, "\n"), sx, sy, ex, ey
+    -- Solo soportamos selección en una línea (los wikilinks no tienen \n)
+    local b_start = rune_to_byte(line, sx) + 1  -- Lua 1-based
+    local b_end   = rune_to_byte(line, ex)       -- Lua 1-based inclusive
+
+    local sel_text = line:sub(b_start, b_end)
+
+    return sel_text, sx, sy, ex, ey
 end
 
 local function extract_inner(text)
-    text = text:gsub("^%[%[", "")
-    text = text:gsub("%]%]$", "")
+    text = text:gsub("^%[+", "")
+    text = text:gsub("%]+$", "")
     text = text:gsub("^%s+", "")
     text = text:gsub("%s+$", "")
     return text
@@ -157,29 +219,29 @@ end
 
 -- =========================
 -- REPLACE + RESELECT
+-- Coordenadas en runas.
 -- =========================
 
 local function replace_and_reselect(bp, sx, sy, ex, ey, value)
     local c = bp.Cursor
     bp.Buf:Replace(buffer.Loc(sx, sy), buffer.Loc(ex, ey), value)
+    -- #value en Lua es bytes; necesitamos runas para el nuevo Loc
+    local value_runes = bytes_to_runes(value, #value)
     c.CurSelection[1] = buffer.Loc(sx, sy)
-    c.CurSelection[2] = buffer.Loc(sx + #value, sy)
-    c.Loc = buffer.Loc(sx + #value, sy)
+    c.CurSelection[2] = buffer.Loc(sx + value_runes, sy)
+    c.Loc = buffer.Loc(sx + value_runes, sy)
 end
 
 -- =========================
 -- RESOLVE LINK → PATH ABSOLUTO
--- Añade .md si no tiene extensión, resuelve relativo al vault dir.
 -- =========================
 
 local function resolve_path(bp, link)
     local dir  = get_dir(bp)
-    -- Si el link no tiene extensión, asume .md
     local path = link
     if not path:match("%.[^/]+$") then
         path = path .. ".md"
     end
-    -- Si no es absoluto, lo hace relativo al vault dir
     if path:sub(1, 1) ~= "/" then
         path = dir .. "/" .. path
     end
@@ -187,7 +249,7 @@ local function resolve_path(bp, link)
 end
 
 -- =========================
--- COMMAND: WikilinkCycle (Alt-W)
+-- COMMAND: WikilinkCycle
 -- =========================
 
 function WikilinkCycle(bp)
@@ -201,12 +263,24 @@ function WikilinkCycle(bp)
             return
         end
         sx, sy, ex, ey = fsx, fsy, fex, fey
-        local c = bp.Cursor
-        c.CurSelection[1] = buffer.Loc(sx, sy)
-        c.CurSelection[2] = buffer.Loc(ex, ey)
-        c.Loc = buffer.Loc(ex, ey)
-        local line = bp.Buf:Line(sy)
-        sel = line:sub(sx + 1, ex)
+        -- Lee el texto del enlace directamente (coordenadas en runas ya correctas)
+        local function rune_to_byte(s, rune_count)
+            local i = 1
+            local r = 0
+            while r < rune_count and i <= #s do
+                local b = s:byte(i)
+                if b < 0x80 then i = i + 1
+                elseif b < 0xE0 then i = i + 2
+                elseif b < 0xF0 then i = i + 3
+                else i = i + 4 end
+                r = r + 1
+            end
+            return i - 1
+        end
+        local line    = bp.Buf:Line(sy)
+        local b_start = rune_to_byte(line, sx) + 1
+        local b_end   = rune_to_byte(line, ex - 1)
+        sel = line:sub(b_start, b_end)
     end
 
     local inner = extract_inner(sel)
@@ -217,15 +291,20 @@ function WikilinkCycle(bp)
         local dir          = get_dir(bp)
         state.vault_dir    = dir
         state.candidates   = build_candidates(dir, inner)
-        -- Si el enlace está vacío [[]], inserta la fecha de hoy como primera opción
-        if inner == "" then
-            local f = io.popen("date +%Y-%m-%d 2>/dev/null")
-            if f then
-                local today = f:read("*l")
-                f:close()
-                if today and today ~= "" then
-                    table.insert(state.candidates, 1, today)
+        -- Si el enlace está vacío [[]], inserta la sugerencia configurada al inicio
+        if inner == "" and EMPTY_LINK_DEFAULT ~= nil then
+            local suggestion
+            if EMPTY_LINK_DEFAULT:find("%%") then
+                local f = io.popen("date +'" .. EMPTY_LINK_DEFAULT .. "' 2>/dev/null")
+                if f then
+                    suggestion = f:read("*l")
+                    f:close()
                 end
+            else
+                suggestion = EMPTY_LINK_DEFAULT
+            end
+            if suggestion and suggestion ~= "" then
+                table.insert(state.candidates, 1, suggestion)
             end
         end
     end
@@ -248,14 +327,11 @@ function WikilinkCycle(bp)
 end
 
 -- =========================
--- COMMAND: WikilinkOpen (Alt-E)
--- Abre en nueva pestaña el archivo referenciado por [[...]] bajo cursor
--- o selección. Lo crea si no existe.
+-- COMMAND: WikilinkOpen
 -- =========================
 
 function WikilinkOpen(bp)
 
-    -- Obtiene el texto del enlace: primero selección, luego bajo cursor
     local sel, _, _, _, _ = get_selection(bp)
 
     if not sel then
@@ -264,8 +340,23 @@ function WikilinkOpen(bp)
             micro.InfoBar():Message("wikilink: cursor no está dentro de [[...]]")
             return
         end
-        local line = bp.Buf:Line(fsy)
-        sel = line:sub(fsx + 1, fex)
+        local function rune_to_byte(s, rune_count)
+            local i = 1
+            local r = 0
+            while r < rune_count and i <= #s do
+                local b = s:byte(i)
+                if b < 0x80 then i = i + 1
+                elseif b < 0xE0 then i = i + 2
+                elseif b < 0xF0 then i = i + 3
+                else i = i + 4 end
+                r = r + 1
+            end
+            return i - 1
+        end
+        local line    = bp.Buf:Line(fsy)
+        local b_start = rune_to_byte(line, fsx) + 1
+        local b_end   = rune_to_byte(line, fex)
+        sel = line:sub(b_start, b_end)
     end
 
     local inner = extract_inner(sel)
@@ -277,7 +368,6 @@ function WikilinkOpen(bp)
 
     local full_path = resolve_path(bp, inner)
 
-    -- Crea el archivo si no existe (touch equivalente)
     local f = io.open(full_path, "r")
     if f then
         f:close()
@@ -291,9 +381,7 @@ function WikilinkOpen(bp)
         end
     end
 
-    -- Abre en nueva pestaña usando el comando interno :tab
     bp:NewTabCmd({full_path})
-
     micro.InfoBar():Message("wikilink: abierto → " .. full_path)
 end
 

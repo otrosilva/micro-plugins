@@ -359,9 +359,22 @@ function WikilinkOpen(bp)
         return
     end
 
-    -- Los enlaces internos (#Título) no tienen archivo que abrir
+    -- Enlace interno (#Título): saltar al heading en el buffer actual
     if inner:sub(1, 1) == "#" then
-        micro.InfoBar():Message("wikilink: enlace interno, no abre archivo")
+        local target   = inner:sub(2)  -- título sin el #
+        local buf      = bp.Buf
+        local numLines = buf:LinesNum()
+        for i = 0, numLines - 1 do
+            local line  = buf:Line(i)
+            local title = heading_title(line)
+            if title and title == target then
+                bp.Cursor:GotoLoc(buffer.Loc(0, i))
+                bp:Center()
+                micro.InfoBar():Message("wikilink: → " .. target)
+                return
+            end
+        end
+        micro.InfoBar():Message('wikilink: heading no encontrado "' .. target .. '"')
         return
     end
 

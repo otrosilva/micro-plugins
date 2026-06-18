@@ -222,8 +222,10 @@ local function extract_inner(text)
 end
 
 local function is_expanded_candidate(text)
+    -- Ignorar alias (|...) al comparar con candidatos
+    local clean = text:match("^([^|]+)") or text
     for _, c in ipairs(state.candidates) do
-        if c == text then return true end
+        if c == clean then return true end
     end
     return false
 end
@@ -321,8 +323,15 @@ function WikilinkCycle(bp)
 
     state.index = (state.index % #state.candidates) + 1
 
-    local candidate   = state.candidates[state.index]
-    local replacement = "[[" .. candidate .. "]]"
+    local candidate = state.candidates[state.index]
+    local replacement
+    -- Si el candidato tiene subdirectorio, agregar alias con solo el nombre final
+    local basename = candidate:match("([^/]+)$")
+    if basename and basename ~= candidate then
+        replacement = "[[" .. candidate .. "|" .. basename .. "]]"
+    else
+        replacement = "[[" .. candidate .. "]]"
+    end
 
     replace_and_reselect(bp, sx, sy, ex, ey, replacement)
 

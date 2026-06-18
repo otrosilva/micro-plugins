@@ -3,6 +3,7 @@
 --
 -- Comandos:
 --   :wikilink      → cicla archivos .md que coincidan con el texto en [[...]]
+--                    Si el contenido empieza con #, busca headings en el archivo actual.
 --   :wikilinkopen  → abre el archivo referenciado en [[...]] en nueva pestaña
 --                    (lo crea si no existe)
 --
@@ -20,14 +21,6 @@ local buffer = import("micro/buffer")
 -- CONFIGURACIÓN
 -- =========================
 
--- Primera opción al ciclar [[]] vacío.
--- Puede ser una fecha con formato strftime, una cadena fija, o nil para desactivar.
--- Ejemplos:
---   "%Y-%m-%d"        → 2025-06-16  (fecha de hoy, estilo Obsidian daily note)
---   "%d-%m-%Y"        → 16-06-2025
---   "%Y/%m/%d"        → 2025/06/16  (crea subcarpetas por año/mes)
---   "Inbox"           → siempre sugiere el archivo Inbox
---   nil               → sin sugerencia especial, cicla todos los archivos
 local EMPTY_LINK_DEFAULT = "%Y-%m-%d"
 
 -- =========================
@@ -43,11 +36,8 @@ local state = {
 
 -- =========================
 -- UTF-8: bytes → runas
--- Micro usa X en runas (caracteres Unicode), Lua trabaja en bytes.
--- Necesitamos convertir los índices de find() antes de pasarlos a buffer.Loc().
 -- =========================
 
--- Cuenta runas en un string de bytes hasta el byte offset dado (0-based).
 local function bytes_to_runes(s, byte_offset)
     local runes = 0
     local i = 1
@@ -66,6 +56,20 @@ local function bytes_to_runes(s, byte_offset)
         runes = runes + 1
     end
     return runes
+end
+
+local function rune_to_byte(s, rune_count)
+    local i = 1
+    local r = 0
+    while r < rune_count and i <= #s do
+        local b = s:byte(i)
+        if b < 0x80 then i = i + 1
+        elseif b < 0xE0 then i = i + 2
+        elseif b < 0xF0 then i = i + 3
+        else i = i + 4 end
+        r = r + 1
+    end
+    return i - 1  -- byte offset 0-based del último byte leído
 end
 
 -- =========================
@@ -88,7 +92,7 @@ local function get_dir(bp)
 end
 
 -- =========================
--- FILE SEARCH
+-- FILE SEARCH (externa)
 -- =========================
 
 local function trim_md(s)
@@ -124,24 +128,51 @@ local function build_candidates(dir, query)
 end
 
 -- =========================
+-- HEADING SEARCH (interna)
+-- Busca headings en el buffer actual que coincidan con el query.
+-- Devuelve candidatos como "#Título" (sin espacios entre # y título).
+-- =========================
+
+local function heading_title(line)
+    local _, title = line:match("^(#+)%s+(.+)$")
+    return title
+end
+
+local function build_internal_candidates(bp, query)
+    local results = {}
+    local buf     = bp.Buf
+    local q       = query:lower()
+    local numLines = buf:LinesNum()
+
+    for i = 0, numLines - 1 do
+        local line  = buf:Line(i)
+        local title = heading_title(line)
+        if title then
+            if q == "" or title:lower():find(q, 1, true) then
+                table.insert(results, "#" .. title)
+            end
+        end
+    end
+    return results
+end
+
+-- =========================
 -- FIND [[...]] UNDER CURSOR
--- Devuelve coordenadas en RUNAS (para buffer.Loc), no en bytes.
 -- =========================
 
 local function find_wikilink_at_cursor(bp)
     local c    = bp.Cursor
-    local cx   = c.Loc.X   -- runas (micro)
+    local cx   = c.Loc.X
     local cy   = c.Loc.Y
-    local line = bp.Buf:Line(cy)  -- bytes UTF-8
+    local line = bp.Buf:Line(cy)
 
     local search_from = 1
     while true do
         local s, e = line:find("%[%[.-%]%]", search_from)
         if not s then break end
 
-        -- Convierte índices de bytes a runas para comparar con cx
-        local s_rune = bytes_to_runes(line, s - 1)  -- 0-based rune del primer [
-        local e_rune = bytes_to_runes(line, e + 1)  -- 0-based rune después del último ]
+        local s_rune = bytes_to_runes(line, s - 1)
+        local e_rune = bytes_to_runes(line, e + 1)
 
         if cx >= s_rune and cx <= e_rune then
             return s_rune, cy, e_rune, cy
@@ -153,7 +184,6 @@ end
 
 -- =========================
 -- SELECTION
--- Lee coordenadas en runas desde CurSelection (micro ya las guarda en runas).
 -- =========================
 
 local function get_selection(bp)
@@ -175,28 +205,9 @@ local function get_selection(bp)
         sx, sy, ex, ey = bx, by, ax, ay
     end
 
-    -- Para leer el texto usamos LineBytes y extraemos por runas
-    local line = bp.Buf:Line(sy)
-
-    -- Convierte runa offset a byte offset para sub()
-    local function rune_to_byte(s, rune_count)
-        local i = 1
-        local r = 0
-        while r < rune_count and i <= #s do
-            local b = s:byte(i)
-            if b < 0x80 then i = i + 1
-            elseif b < 0xE0 then i = i + 2
-            elseif b < 0xF0 then i = i + 3
-            else i = i + 4 end
-            r = r + 1
-        end
-        return i - 1  -- byte offset 0-based del último byte leído
-    end
-
-    -- Solo soportamos selección en una línea (los wikilinks no tienen \n)
-    local b_start = rune_to_byte(line, sx) + 1  -- Lua 1-based
-    local b_end   = rune_to_byte(line, ex)       -- Lua 1-based inclusive
-
+    local line    = bp.Buf:Line(sy)
+    local b_start = rune_to_byte(line, sx) + 1
+    local b_end   = rune_to_byte(line, ex)
     local sel_text = line:sub(b_start, b_end)
 
     return sel_text, sx, sy, ex, ey
@@ -219,13 +230,11 @@ end
 
 -- =========================
 -- REPLACE + RESELECT
--- Coordenadas en runas.
 -- =========================
 
 local function replace_and_reselect(bp, sx, sy, ex, ey, value)
     local c = bp.Cursor
     bp.Buf:Replace(buffer.Loc(sx, sy), buffer.Loc(ex, ey), value)
-    -- #value en Lua es bytes; necesitamos runas para el nuevo Loc
     local value_runes = bytes_to_runes(value, #value)
     c.CurSelection[1] = buffer.Loc(sx, sy)
     c.CurSelection[2] = buffer.Loc(sx + value_runes, sy)
@@ -263,20 +272,6 @@ function WikilinkCycle(bp)
             return
         end
         sx, sy, ex, ey = fsx, fsy, fex, fey
-        -- Lee el texto del enlace directamente (coordenadas en runas ya correctas)
-        local function rune_to_byte(s, rune_count)
-            local i = 1
-            local r = 0
-            while r < rune_count and i <= #s do
-                local b = s:byte(i)
-                if b < 0x80 then i = i + 1
-                elseif b < 0xE0 then i = i + 2
-                elseif b < 0xF0 then i = i + 3
-                else i = i + 4 end
-                r = r + 1
-            end
-            return i - 1
-        end
         local line    = bp.Buf:Line(sy)
         local b_start = rune_to_byte(line, sx) + 1
         local b_end   = rune_to_byte(line, ex - 1)
@@ -288,29 +283,39 @@ function WikilinkCycle(bp)
     if not is_expanded_candidate(inner) then
         state.anchor_query = inner
         state.index        = 0
-        local dir          = get_dir(bp)
-        state.vault_dir    = dir
-        state.candidates   = build_candidates(dir, inner)
-        -- Si el enlace está vacío [[]], inserta la sugerencia configurada al inicio
-        if inner == "" and EMPTY_LINK_DEFAULT ~= nil then
-            local suggestion
-            if EMPTY_LINK_DEFAULT:find("%%") then
-                local f = io.popen("date +'" .. EMPTY_LINK_DEFAULT .. "' 2>/dev/null")
-                if f then
-                    suggestion = f:read("*l")
-                    f:close()
+
+        -- Bifurcación: # al inicio → búsqueda interna de headings
+        if inner:sub(1, 1) == "#" then
+            local query      = inner:sub(2)  -- query sin el # inicial
+            state.candidates = build_internal_candidates(bp, query)
+            state.vault_dir  = nil
+        else
+            local dir        = get_dir(bp)
+            state.vault_dir  = dir
+            state.candidates = build_candidates(dir, inner)
+
+            -- Sugerencia de fecha/nombre para [[]] vacío
+            if inner == "" and EMPTY_LINK_DEFAULT ~= nil then
+                local suggestion
+                if EMPTY_LINK_DEFAULT:find("%%") then
+                    local f = io.popen("date +'" .. EMPTY_LINK_DEFAULT .. "' 2>/dev/null")
+                    if f then
+                        suggestion = f:read("*l")
+                        f:close()
+                    end
+                else
+                    suggestion = EMPTY_LINK_DEFAULT
                 end
-            else
-                suggestion = EMPTY_LINK_DEFAULT
-            end
-            if suggestion and suggestion ~= "" then
-                table.insert(state.candidates, 1, suggestion)
+                if suggestion and suggestion ~= "" then
+                    table.insert(state.candidates, 1, suggestion)
+                end
             end
         end
     end
 
     if #state.candidates == 0 then
-        micro.InfoBar():Message('wikilink: sin coincidencias para "' .. state.anchor_query .. '"')
+        local scope = state.anchor_query:sub(1,1) == "#" and "headings" or "archivos"
+        micro.InfoBar():Message('wikilink: sin ' .. scope .. ' para "' .. state.anchor_query .. '"')
         return
     end
 
@@ -321,8 +326,9 @@ function WikilinkCycle(bp)
 
     replace_and_reselect(bp, sx, sy, ex, ey, replacement)
 
+    local scope = candidate:sub(1,1) == "#" and "heading" or "archivo"
     micro.InfoBar():Message(
-        string.format("wikilink [%d/%d]: %s", state.index, #state.candidates, candidate)
+        string.format("wikilink [%d/%d] %s: %s", state.index, #state.candidates, scope, candidate)
     )
 end
 
@@ -340,19 +346,6 @@ function WikilinkOpen(bp)
             micro.InfoBar():Message("wikilink: cursor no está dentro de [[...]]")
             return
         end
-        local function rune_to_byte(s, rune_count)
-            local i = 1
-            local r = 0
-            while r < rune_count and i <= #s do
-                local b = s:byte(i)
-                if b < 0x80 then i = i + 1
-                elseif b < 0xE0 then i = i + 2
-                elseif b < 0xF0 then i = i + 3
-                else i = i + 4 end
-                r = r + 1
-            end
-            return i - 1
-        end
         local line    = bp.Buf:Line(fsy)
         local b_start = rune_to_byte(line, fsx) + 1
         local b_end   = rune_to_byte(line, fex)
@@ -363,6 +356,12 @@ function WikilinkOpen(bp)
 
     if inner == "" then
         micro.InfoBar():Message("wikilink: el enlace está vacío")
+        return
+    end
+
+    -- Los enlaces internos (#Título) no tienen archivo que abrir
+    if inner:sub(1, 1) == "#" then
+        micro.InfoBar():Message("wikilink: enlace interno, no abre archivo")
         return
     end
 

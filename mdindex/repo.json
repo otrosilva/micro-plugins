@@ -1,0 +1,14 @@
+[{
+    "Name": "mdindex",
+    "Description": "Genera un índice para el archivo actual.",
+    "Website": "https://github.com/otrosilva",
+    "Tags": ["markdown", "obsidian", "index","indice"],
+    "Versions": [
+        {
+            "Version": "1.0.0",
+            "Require": {
+                "micro": ">=2.0.0"
+            }
+        }
+    ]
+}]

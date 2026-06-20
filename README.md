@@ -6,10 +6,9 @@
 
 ## plugins para formato markdown
 
-- mdtasks - pasa de normal -> viñeta -> tarea -> tarea completada -> normal.
+- mdtasks - pasa de normal -> viñeta -> tarea -> tarea completada -> tarea aplazada -> normal.
 - csvmd - convierte csv a tabla markdown.
 - mdcsv - convierte tabla markdown a csv.
-- mdformat - pasa de normal -> negrita -> itálica -> tachado -> resaltado.
-- mdcode - encierra en bloque de código las líneas seleccionadas.
+- mdformat - pasa de normal -> negrita -> itálica -> tachado -> resaltado -> código.
 - barra - una barra en las tareas con subtareas.
-- wikilink - autocompleta enlaces.
+- wikilink - autocompleta enlaces internos y externos.

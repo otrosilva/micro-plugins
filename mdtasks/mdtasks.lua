@@ -1,4 +1,4 @@
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 -- Keybinding recomendada (agregar a ~/.config/micro/bindings.json):
 -- {
 --     "F11": "lua:mdtasks.ToggleTasks"
@@ -6,51 +6,47 @@ VERSION = "1.0.0"
 local micro  = import("micro")
 local config = import("micro/config")
 local buffer = import("micro/buffer")
-
 local function processLine(text)
     local indent, body
-
     -- Estado 3: "- [ ] texto" → "- [x] texto"
     indent, body = text:match("^(%s*)%- %[%s%] (.*)$")
     if indent then
         return indent .. "- [x] " .. body
     end
-
-    -- Estado 4: "- [x] texto" o "- [X] texto" → texto plano
+    -- Estado 4: "- [x] texto" o "- [X] texto" → "- [>] texto"
     indent, body = text:match("^(%s*)%- %[x%] (.*)$")
     if indent then
-        return indent .. body
+        return indent .. "- [>] " .. body
     end
     indent, body = text:match("^(%s*)%- %[X%] (.*)$")
     if indent then
+        return indent .. "- [>] " .. body
+    end
+    -- Estado 5: "- [>] texto" → texto plano
+    indent, body = text:match("^(%s*)%- %[>%] (.*)$")
+    if indent then
         return indent .. body
     end
-
     -- Estado 2: "- texto" (viñeta simple) → "- [ ] texto"
     indent, body = text:match("^(%s*)%- (.*)$")
     if indent then
         return indent .. "- [ ] " .. body
     end
-
     -- Línea vacía → sin cambios
     if text:match("^%s*$") then
         return text
     end
-
     -- Estado 1: texto plano → "- texto"
     indent, body = text:match("^(%s*)(.*)$")
     return indent .. "- " .. body
 end
-
 function ToggleTasks(bp)
     local c = bp.Cursor
     local buf = bp.Buf
     local first = c.Y
     local last = c.Y
-
     local sel = c.CurSelection
     local hasSelection = sel[1].X ~= sel[2].X or sel[1].Y ~= sel[2].Y
-
     if hasSelection then
         local a = sel[1]
         local b = sel[2]
@@ -60,7 +56,6 @@ function ToggleTasks(bp)
         first = math.min(a.Y, b.Y)
         last  = math.max(a.Y, b.Y)
     end
-
     for y = first, last do
         local old = buf:Line(y)
         local new = processLine(old)
@@ -71,7 +66,6 @@ function ToggleTasks(bp)
         )
     end
 end
-
 function init()
     config.MakeCommand("mdtasks", ToggleTasks, config.NoComplete)
 end

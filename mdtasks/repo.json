@@ -4,7 +4,7 @@
     "Tags": ["markdown", "tasks"],
     "Versions": [
         {
-            "Version": "1.0.0",
+            "Version": "1.1.0",
             "Require": {
                 "micro": ">=2.0.0"
             }

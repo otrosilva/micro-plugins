@@ -1,6 +1,6 @@
 -- barra.lua — Plugin para micro editor
 -- Genera barras de progreso en tareas con subtareas al estilo del plugin Barra de Obsidian
--- VERSION = "1.0.0"
+-- VERSION = "1.1.0"
 --
 -- Instalación:
 --   ~/.config/micro/plug/barra/barra.lua
@@ -32,7 +32,7 @@ local function getIndent(line)
 end
 
 local function isTaskLine(line)
-    return line:match("^%s*%- %[[ xX]%]") ~= nil
+    return line:match("^%s*%- %[[ xX>]%]") ~= nil
 end
 
 local function isChecked(line)

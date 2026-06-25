@@ -12,3 +12,4 @@
 - mdformat - pasa de normal -> negrita -> itálica -> tachado -> resaltado -> código.
 - barra - una barra en las tareas con subtareas.
 - wikilink - autocompleta enlaces internos y externos.
+- hledgercheck - para revisar con hledger si todo está bien.

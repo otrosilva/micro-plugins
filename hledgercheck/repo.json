@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "hledgercheck",
+        "Description": "Valida la sintaxis y el balance de tu journal de hledger al guardar, mostrando errores en el InfoBar",
+        "Website": "https://github.com/otrosilva/dotfiles",
+        "Tags": ["hledger", "finance", "linting", "journal"],
+        "Versions": [
+            {
+                "Version": "1.0.0",
+                "Url": "https://github.com/otrosilva/dotfiles/archive/refs/heads/master.zip",
+                "Require": {
+                    "micro": ">=2.0.8"
+                }
+            }
+        ]
+    }
+]

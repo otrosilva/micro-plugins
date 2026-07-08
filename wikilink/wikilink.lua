@@ -135,6 +135,11 @@ end
 
 local function heading_title(line)
     local _, title = line:match("^(#+)%s+(.+)$")
+    if title then
+        -- Recortar espacio final accidental (ej. "# contraseñas ")
+        -- para que coincida exactamente con el texto generado en [[#...]]
+        title = title:gsub("%s+$", "")
+    end
     return title
 end
 
